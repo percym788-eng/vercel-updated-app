@@ -1,0 +1,21 @@
+{
+  "name": "vercel-updated-app",
+  "version": "1.0.0",
+  "description": "Enhanced SAT Helper Authentication Server",
+  "main": "api/auth.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'Build completed'",
+    "start": "vercel dev"
+  },
+  "dependencies": {
+    "crypto": "^1.0.1"
+  },
+  "devDependencies": {
+    "vercel": "^32.5.0"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
