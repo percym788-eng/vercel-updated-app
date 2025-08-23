@@ -73,23 +73,9 @@ const cleanExpiredUsers = () => {
     });
 };
 
-// Verify RSA signature for admin access (matching your original working code)
-const verifyRSASignature = (challenge, signature) => {
-    try {
-        console.log('🔐 Using RSA Public Key (first 100 chars):', ADMIN_RSA_PUBLIC_KEY.substring(0, 100));
-        console.log('📝 Challenge to verify:', challenge);
-        console.log('✍️ Signature to verify (first 50 chars):', signature.substring(0, 50));
-        
-        const publicKey = crypto.createPublicKey(ADMIN_RSA_PUBLIC_KEY);
-        const isValid = crypto.verify('sha256', Buffer.from(challenge), publicKey, Buffer.from(signature, 'base64'));
-        
-        console.log('🔍 RSA verification result:', isValid);
-        return isValid;
-    } catch (error) {
-        console.error('❌ RSA verification error:', error);
-        console.error('Error details:', error.message);
-        return false;
-    }
+// Simple password verification for admin access - much more reliable!
+const verifyAdminPassword = (password) => {
+    return password === ADMIN_PASSWORD;
 };
 
 export default async function handler(req, res) {
@@ -318,18 +304,18 @@ async function handleAdminValidate(req, res) {
         return res.status(405).json({ success: false, message: 'Method not allowed' });
     }
     
-    const { challenge, signature, macAddresses } = req.body;
+    const { password, macAddresses } = req.body;
     
     console.log('🌐 Connecting to: admin validation');
     console.log('🖥️ Validating device access...');
     console.log('📱 Device MAC addresses:', macAddresses?.join(', ') || 'None provided');
-    console.log('🔐 Challenge:', challenge?.substring(0, 16) + '...' || 'None');
+    console.log('🔐 Password provided:', password ? 'YES' : 'NO');
     
-    if (!challenge || !signature || !macAddresses) {
+    if (!password || !macAddresses) {
         console.log('❌ Missing required fields');
         return res.status(400).json({
             success: false,
-            message: 'Missing required fields'
+            message: 'Missing required fields: password and macAddresses required'
         });
     }
     
@@ -342,36 +328,36 @@ async function handleAdminValidate(req, res) {
     });
     
     if (!hasAuthorizedMac) {
-        console.log('No authorized MAC found. Allowed MACs:', ALLOWED_ADMIN_MAC_ADDRESSES);
-        console.log('❌ ADMIN ACCESS DENIED: Invalid RSA signature');
+        console.log('❌ ADMIN ACCESS DENIED: Invalid device MAC addresses');
+        console.log('Allowed MACs:', ALLOWED_ADMIN_MAC_ADDRESSES);
         console.log('🚫 ACCESS DENIED');
         console.log('Admin panel access restricted to authorized users only.');
         
         return res.status(403).json({
             success: false,
-            message: 'Unauthorized device. MAC address not in allowed list.'
+            message: '❌ ADMIN ACCESS DENIED: Invalid device MAC addresses'
         });
     }
     
     console.log('🔍 Validating with server...');
     
-    // Verify RSA signature
-    const signatureValid = verifyRSASignature(challenge, signature);
-    console.log('RSA signature validation:', signatureValid ? 'PASSED' : 'FAILED');
+    // Verify password
+    const passwordValid = verifyAdminPassword(password);
+    console.log('Password validation:', passwordValid ? 'PASSED' : 'FAILED');
     
-    if (!signatureValid) {
-        console.log('❌ ADMIN ACCESS DENIED: Invalid RSA signature');
+    if (!passwordValid) {
+        console.log('❌ ADMIN ACCESS DENIED: Invalid password');
         console.log('🚫 ACCESS DENIED');
         console.log('Admin panel access restricted to authorized users only.');
         
         return res.status(403).json({
             success: false,
-            message: 'Invalid RSA signature'
+            message: '❌ ADMIN ACCESS DENIED: Invalid password'
         });
     }
     
     console.log('✅ ADMIN ACCESS GRANTED');
-    console.log('Admin access granted successfully');
+    console.log('Admin validation successful');
     
     return res.status(200).json({
         success: true,
