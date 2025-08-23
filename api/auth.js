@@ -1,4 +1,4 @@
-// api/auth.js - Fixed Authentication Handler with Your MAC Addresses
+// api/auth.js - Fixed Authentication Handler with Correct RSA Key
 import crypto from 'crypto';
 
 // In-memory storage (you can later replace with proper database)
@@ -7,15 +7,15 @@ let apiKeys = [];
 let loginHistory = [];
 let activeSessions = new Map();
 
-// RSA Public Key that matches your private key
+// RSA Public Key that matches your private key from rsa_keys.json
 const ADMIN_RSA_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0Dojkpn9uLlpJGfMnKJ/
-G8DNP0F4uq78lrbCnZvKWFQmf3Mj3LoRWZPga9MYmSvfIbLJmaL/PMslxbDyXvI7
-CIGCwPtZVqeE6S6UJ/EeD0EpJCNetWUOPOZ/Vqo+WrY/TaXQix/IzFNKXMj0Ul43
-shU/BWM5lnPoxGtu2g0Z3hmhqDeHFQKG23V68K7d1xHhJkmlCVkSgQs+Oe/rkAHL
-4g7vd1ViJ33dF4wKiWLKTmvcYOJXbNPE/RXwvb48qtPWoy2R1E0Jg52KNEUG2hDx
-wmWRcyAv2bALB5G0EANaYQCieOethyykts2o7rV7fy6jtxE+HoiGE0kLAmlbsoHc
-wQIDAQAB
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAny0a0cUEmy2nTrRIuBNw
+zVfORXuQcCjvHHzrTxFyIT+gz4A/8+xgJXjLVFiRT+a+679tTxEM5lCRagznnW60
+jsr4CXcUfXfUSeXsVs9hbQuSWVUdmjRtnZR2alXl53yO+aG1BGPPfGhemOIQ9g/T
+ZngwOZiWuEEnob1ncl9+21pioa/MqzSZ0jLAqeANJDxfQqLT3UY8qzn9Dl/pOSJY
+lsSQMPWgehs3YNiHy5N5gNyfEpzhexXMJUjQXSYVcjW766RYmYOBgRti0Tn+6Unq
+69b/mhzWXB0sJC9avXMRPzb0l/YBtRmeom3TPV7lR7qJquH3nvVymrMm0FIsI2EO
+lwIDAQAB
 -----END PUBLIC KEY-----`;
 
 // Your actual MAC addresses from the error message
@@ -324,13 +324,13 @@ async function handleAdminValidate(req, res) {
     
     const { challenge, signature, macAddresses } = req.body;
     
-    console.log('Admin validation attempt:', {
-        challenge: challenge?.substring(0, 16) + '...',
-        signature: signature?.substring(0, 32) + '...',
-        macAddresses
-    });
+    console.log('🌐 Connecting to: admin validation');
+    console.log('🖥️ Validating device access...');
+    console.log('📱 Device MAC addresses:', macAddresses?.join(', ') || 'None provided');
+    console.log('🔐 Challenge:', challenge?.substring(0, 16) + '...' || 'None');
     
     if (!challenge || !signature || !macAddresses) {
+        console.log('❌ Missing required fields');
         return res.status(400).json({
             success: false,
             message: 'Missing required fields'
@@ -347,23 +347,34 @@ async function handleAdminValidate(req, res) {
     
     if (!hasAuthorizedMac) {
         console.log('No authorized MAC found. Allowed MACs:', ALLOWED_ADMIN_MAC_ADDRESSES);
+        console.log('❌ ADMIN ACCESS DENIED: Invalid RSA signature');
+        console.log('🚫 ACCESS DENIED');
+        console.log('Admin panel access restricted to authorized users only.');
+        
         return res.status(403).json({
             success: false,
             message: 'Unauthorized device. MAC address not in allowed list.'
         });
     }
     
+    console.log('🔍 Validating with server...');
+    
     // Verify RSA signature
     const signatureValid = verifyRSASignature(challenge, signature);
     console.log('RSA signature validation:', signatureValid ? 'PASSED' : 'FAILED');
     
     if (!signatureValid) {
+        console.log('❌ ADMIN ACCESS DENIED: Invalid RSA signature');
+        console.log('🚫 ACCESS DENIED');
+        console.log('Admin panel access restricted to authorized users only.');
+        
         return res.status(403).json({
             success: false,
             message: 'Invalid RSA signature'
         });
     }
     
+    console.log('✅ ADMIN ACCESS GRANTED');
     console.log('Admin access granted successfully');
     
     return res.status(200).json({
