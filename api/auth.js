@@ -73,25 +73,21 @@ const cleanExpiredUsers = () => {
     });
 };
 
-// Verify RSA signature for admin access
+// Verify RSA signature for admin access (matching your original working code)
 const verifyRSASignature = (challenge, signature) => {
     try {
-        const publicKey = crypto.createPublicKey({
-            key: ADMIN_RSA_PUBLIC_KEY,
-            format: 'pem',
-            type: 'spki'
-        });
+        console.log('🔐 Using RSA Public Key (first 100 chars):', ADMIN_RSA_PUBLIC_KEY.substring(0, 100));
+        console.log('📝 Challenge to verify:', challenge);
+        console.log('✍️ Signature to verify (first 50 chars):', signature.substring(0, 50));
         
-        const isValid = crypto.verify(
-            'sha256',
-            Buffer.from(challenge),
-            publicKey,
-            Buffer.from(signature, 'base64')
-        );
+        const publicKey = crypto.createPublicKey(ADMIN_RSA_PUBLIC_KEY);
+        const isValid = crypto.verify('sha256', Buffer.from(challenge), publicKey, Buffer.from(signature, 'base64'));
         
+        console.log('🔍 RSA verification result:', isValid);
         return isValid;
     } catch (error) {
-        console.error('RSA verification error:', error);
+        console.error('❌ RSA verification error:', error);
+        console.error('Error details:', error.message);
         return false;
     }
 };
