@@ -1,8 +1,13 @@
-// api/auth.js - Updated Authentication Handler with Persistent Database
+// api/auth.js - Fixed Authentication Handler with Your MAC Addresses
 import crypto from 'crypto';
-import { getDatabase } from '../lib/database.js';
 
-// RSA Public Key for admin validation (replace with your actual key)
+// In-memory storage (you can later replace with proper database)
+let users = [];
+let apiKeys = [];
+let loginHistory = [];
+let activeSessions = new Map();
+
+// RSA Public Key that matches your private key
 const ADMIN_RSA_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0Dojkpn9uLlpJGfMnKJ/
 G8DNP0F4uq78lrbCnZvKWFQmf3Mj3LoRWZPga9MYmSvfIbLJmaL/PMslxbDyXvI7
@@ -13,10 +18,11 @@ wmWRcyAv2bALB5G0EANaYQCieOethyykts2o7rV7fy6jtxE+HoiGE0kLAmlbsoHc
 wQIDAQAB
 -----END PUBLIC KEY-----`;
 
-// Allowed MAC addresses for admin access (replace with actual MAC addresses)
+// Your actual MAC addresses from the error message
 const ALLOWED_ADMIN_MAC_ADDRESSES = [
-    '00:11:22:33:44:55', // Replace with your actual admin MAC addresses
-    '66:77:88:99:aa:bb'
+    'ac:de:48:00:11:22',
+    '88:66:5a:46:b0:d0', 
+    'a6:23:38:92:00:68'
 ];
 
 // Helper Functions
@@ -46,6 +52,22 @@ const isUserExpired = (user) => {
     return false;
 };
 
+const cleanExpiredUsers = () => {
+    // Remove expired non-permanent users only
+    const originalCount = users.length;
+    users = users.filter(user => !isUserExpired(user));
+    
+    if (users.length !== originalCount) {
+        console.log(`Cleaned ${originalCount - users.length} expired non-permanent users`);
+    }
+    
+    // Clean expired API keys
+    apiKeys = apiKeys.filter(apiKey => {
+        const user = users.find(u => u.username === apiKey.username);
+        return user && !isUserExpired(user);
+    });
+};
+
 // Verify RSA signature for admin access
 const verifyRSASignature = (challenge, signature) => {
     try {
@@ -70,10 +92,8 @@ const verifyRSASignature = (challenge, signature) => {
 };
 
 export default async function handler(req, res) {
-    const db = getDatabase();
-    
     // Clean expired users periodically (only non-permanent ones)
-    db.cleanExpiredUsers();
+    cleanExpiredUsers();
     
     const { method } = req;
     const { action } = req.query;
@@ -90,23 +110,23 @@ export default async function handler(req, res) {
     try {
         switch (action) {
             case 'login':
-                return await handleLogin(req, res, db);
+                return await handleLogin(req, res);
             case 'validate-api-key':
-                return await handleValidateApiKey(req, res, db);
+                return await handleValidateApiKey(req, res);
             case 'admin-validate':
-                return await handleAdminValidate(req, res, db);
+                return await handleAdminValidate(req, res);
             case 'admin-data':
-                return await handleAdminData(req, res, db);
+                return await handleAdminData(req, res);
             case 'admin-add-user':
-                return await handleAdminAddUser(req, res, db);
+                return await handleAdminAddUser(req, res);
             case 'admin-remove-user':
-                return await handleAdminRemoveUser(req, res, db);
+                return await handleAdminRemoveUser(req, res);
             case 'admin-approve-user':
-                return await handleAdminApproveUser(req, res, db);
+                return await handleAdminApproveUser(req, res);
             case 'admin-set-permanent':
-                return await handleAdminSetPermanent(req, res, db);
+                return await handleAdminSetPermanent(req, res);
             case 'admin-refresh-user':
-                return await handleAdminRefreshUser(req, res, db);
+                return await handleAdminRefreshUser(req, res);
             default:
                 return res.status(404).json({
                     success: false,
@@ -122,7 +142,7 @@ export default async function handler(req, res) {
     }
 }
 
-async function handleLogin(req, res, db) {
+async function handleLogin(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ success: false, message: 'Method not allowed' });
     }
@@ -137,12 +157,12 @@ async function handleLogin(req, res, db) {
     }
     
     const hashedPassword = hashPassword(password);
-    const user = db.findUser(username);
+    const user = users.find(u => u.username === username && u.password === hashedPassword);
     
-    if (!user || user.password !== hashedPassword) {
-        // Log failed login attempt
-        db.addLoginHistory({
+    if (!user) {
+        loginHistory.push({
             username,
+            timestamp: new Date().toISOString(),
             deviceInfo,
             success: false,
             reason: 'Invalid credentials'
@@ -154,10 +174,11 @@ async function handleLogin(req, res, db) {
         });
     }
     
-    // CRITICAL: Check if user is expired (only for non-permanent users)
+    // Check if user is expired (only for non-permanent users)
     if (isUserExpired(user)) {
-        db.addLoginHistory({
+        loginHistory.push({
             username,
+            timestamp: new Date().toISOString(),
             deviceInfo,
             success: false,
             reason: 'Account expired'
@@ -170,11 +191,12 @@ async function handleLogin(req, res, db) {
     }
     
     if (!user.approved) {
-        db.addLoginHistory({
+        loginHistory.push({
             username,
+            timestamp: new Date().toISOString(),
             deviceInfo,
             success: false,
-            reason: 'Account not approved'
+            reason: 'Not approved'
         });
         
         return res.status(403).json({
@@ -185,17 +207,10 @@ async function handleLogin(req, res, db) {
     
     // For trial accounts that are NOT permanent, enforce device limit
     if (user.accessType === 'trial' && user.permanent === false) {
-        const trialSessions = Array.from(db.activeSessions.values())
+        const trialSessions = Array.from(activeSessions.values())
             .filter(session => session.username === username);
         
         if (trialSessions.length >= 1) {
-            db.addLoginHistory({
-                username,
-                deviceInfo,
-                success: false,
-                reason: 'Trial device limit reached'
-            });
-            
             return res.status(403).json({
                 success: false,
                 message: 'Trial account limit reached. Only one device allowed.'
@@ -205,7 +220,7 @@ async function handleLogin(req, res, db) {
     
     // Create session
     const sessionId = generateSessionId();
-    db.activeSessions.set(sessionId, {
+    activeSessions.set(sessionId, {
         username: user.username,
         accessType: user.accessType,
         permanent: user.permanent !== false,
@@ -215,11 +230,17 @@ async function handleLogin(req, res, db) {
     });
     
     // Log successful login
-    db.addLoginHistory({
+    loginHistory.push({
         username: user.username,
+        timestamp: new Date().toISOString(),
         deviceInfo: deviceInfo,
         success: true
     });
+    
+    // Keep only last 100 login attempts
+    if (loginHistory.length > 100) {
+        loginHistory = loginHistory.slice(-100);
+    }
     
     return res.status(200).json({
         success: true,
@@ -233,7 +254,7 @@ async function handleLogin(req, res, db) {
     });
 }
 
-async function handleValidateApiKey(req, res, db) {
+async function handleValidateApiKey(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ success: false, message: 'Method not allowed' });
     }
@@ -247,7 +268,7 @@ async function handleValidateApiKey(req, res, db) {
         });
     }
     
-    const keyData = db.findApiKey(apiKey);
+    const keyData = apiKeys.find(k => k.apiKey === apiKey);
     
     if (!keyData) {
         return res.status(401).json({
@@ -256,7 +277,7 @@ async function handleValidateApiKey(req, res, db) {
         });
     }
     
-    const user = db.findUser(keyData.username);
+    const user = users.find(u => u.username === keyData.username);
     
     if (!user) {
         return res.status(401).json({
@@ -265,7 +286,7 @@ async function handleValidateApiKey(req, res, db) {
         });
     }
     
-    // CRITICAL: Check if user is expired (only for non-permanent users)
+    // Check if user is expired
     if (isUserExpired(user)) {
         return res.status(401).json({
             success: false,
@@ -291,12 +312,18 @@ async function handleValidateApiKey(req, res, db) {
     });
 }
 
-async function handleAdminValidate(req, res, db) {
+async function handleAdminValidate(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ success: false, message: 'Method not allowed' });
     }
     
     const { challenge, signature, macAddresses } = req.body;
+    
+    console.log('Admin validation attempt:', {
+        challenge: challenge?.substring(0, 16) + '...',
+        signature: signature?.substring(0, 32) + '...',
+        macAddresses
+    });
     
     if (!challenge || !signature || !macAddresses) {
         return res.status(400).json({
@@ -305,25 +332,34 @@ async function handleAdminValidate(req, res, db) {
         });
     }
     
+    // Check if device MAC addresses are authorized
+    const hasAuthorizedMac = macAddresses.some(mac => {
+        const normalizedMac = mac.toLowerCase();
+        const isAuthorized = ALLOWED_ADMIN_MAC_ADDRESSES.includes(normalizedMac);
+        console.log(`Checking MAC ${normalizedMac}: ${isAuthorized ? 'AUTHORIZED' : 'NOT AUTHORIZED'}`);
+        return isAuthorized;
+    });
+    
+    if (!hasAuthorizedMac) {
+        console.log('No authorized MAC found. Allowed MACs:', ALLOWED_ADMIN_MAC_ADDRESSES);
+        return res.status(403).json({
+            success: false,
+            message: 'Unauthorized device. MAC address not in allowed list.'
+        });
+    }
+    
     // Verify RSA signature
-    if (!verifyRSASignature(challenge, signature)) {
+    const signatureValid = verifyRSASignature(challenge, signature);
+    console.log('RSA signature validation:', signatureValid ? 'PASSED' : 'FAILED');
+    
+    if (!signatureValid) {
         return res.status(403).json({
             success: false,
             message: 'Invalid RSA signature'
         });
     }
     
-    // Check if device MAC addresses are authorized
-    const hasAuthorizedMac = macAddresses.some(mac => 
-        ALLOWED_ADMIN_MAC_ADDRESSES.includes(mac.toLowerCase())
-    );
-    
-    if (!hasAuthorizedMac) {
-        return res.status(403).json({
-            success: false,
-            message: 'Unauthorized device. MAC address not in allowed list.'
-        });
-    }
+    console.log('Admin access granted successfully');
     
     return res.status(200).json({
         success: true,
@@ -331,18 +367,33 @@ async function handleAdminValidate(req, res, db) {
     });
 }
 
-async function handleAdminData(req, res, db) {
+async function handleAdminData(req, res) {
     if (req.method !== 'GET') {
         return res.status(405).json({ success: false, message: 'Method not allowed' });
     }
     
     return res.status(200).json({
         success: true,
-        data: db.getAllData()
+        data: {
+            users: users.map(user => ({
+                username: user.username,
+                accessType: user.accessType,
+                approved: user.approved,
+                permanent: user.permanent !== false,
+                createdAt: user.createdAt,
+                expiresAt: user.expiresAt
+            })),
+            apiKeys: apiKeys.map(key => ({
+                username: key.username,
+                createdAt: key.createdAt
+            })),
+            activeSessions: activeSessions.size,
+            loginHistory: loginHistory.slice(-20) // Last 20 login attempts
+        }
     });
 }
 
-async function handleAdminAddUser(req, res, db) {
+async function handleAdminAddUser(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ success: false, message: 'Method not allowed' });
     }
@@ -363,7 +414,7 @@ async function handleAdminAddUser(req, res, db) {
         });
     }
     
-    const existingUser = db.findUser(username);
+    const existingUser = users.find(u => u.username === username);
     if (existingUser) {
         return res.status(409).json({
             success: false,
@@ -383,15 +434,17 @@ async function handleAdminAddUser(req, res, db) {
         createdAt: new Date().toISOString()
     };
     
-    db.addUser(newUser);
+    users.push(newUser);
+    
+    console.log(`User "${username}" created as ${permanent !== false ? 'PERMANENT' : 'TEMPORARY'}`);
     
     return res.status(201).json({
         success: true,
-        message: `User "${username}" created successfully ${permanent !== false ? '(permanent)' : '(temporary)'}`
+        message: `User "${username}" created successfully ${permanent !== false ? '(PERMANENT - will never expire)' : '(temporary)'}`
     });
 }
 
-async function handleAdminRemoveUser(req, res, db) {
+async function handleAdminRemoveUser(req, res) {
     if (req.method !== 'DELETE') {
         return res.status(405).json({ success: false, message: 'Method not allowed' });
     }
@@ -405,29 +458,34 @@ async function handleAdminRemoveUser(req, res, db) {
         });
     }
     
-    const removed = db.removeUser(username);
+    const userIndex = users.findIndex(u => u.username === username);
     
-    if (!removed) {
+    if (userIndex === -1) {
         return res.status(404).json({
             success: false,
             message: 'User not found'
         });
     }
     
+    users.splice(userIndex, 1);
+    
+    // Remove associated API keys
+    apiKeys = apiKeys.filter(k => k.username !== username);
+    
     // Remove active sessions
-    for (const [sessionId, session] of db.activeSessions.entries()) {
+    for (const [sessionId, session] of activeSessions.entries()) {
         if (session.username === username) {
-            db.activeSessions.delete(sessionId);
+            activeSessions.delete(sessionId);
         }
     }
     
     return res.status(200).json({
         success: true,
-        message: `User "${username}" removed successfully`
+        message: `User "${username}" permanently removed from system`
     });
 }
 
-async function handleAdminApproveUser(req, res, db) {
+async function handleAdminApproveUser(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ success: false, message: 'Method not allowed' });
     }
@@ -441,7 +499,7 @@ async function handleAdminApproveUser(req, res, db) {
         });
     }
     
-    const user = db.findUser(username);
+    const user = users.find(u => u.username === username);
     
     if (!user) {
         return res.status(404).json({
@@ -450,17 +508,17 @@ async function handleAdminApproveUser(req, res, db) {
         });
     }
     
-    // Update user approval status
-    db.updateUser(username, { approved: true });
+    user.approved = true;
     
     // Generate API key
     const apiKey = generateApiKey();
     const apiKeyData = {
         apiKey,
-        username: user.username
+        username: user.username,
+        createdAt: new Date().toISOString()
     };
     
-    db.addApiKey(apiKeyData);
+    apiKeys.push(apiKeyData);
     
     return res.status(200).json({
         success: true,
@@ -471,7 +529,7 @@ async function handleAdminApproveUser(req, res, db) {
     });
 }
 
-async function handleAdminSetPermanent(req, res, db) {
+async function handleAdminSetPermanent(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ success: false, message: 'Method not allowed' });
     }
@@ -485,7 +543,7 @@ async function handleAdminSetPermanent(req, res, db) {
         });
     }
     
-    const user = db.findUser(username);
+    const user = users.find(u => u.username === username);
     
     if (!user) {
         return res.status(404).json({
@@ -494,19 +552,16 @@ async function handleAdminSetPermanent(req, res, db) {
         });
     }
     
-    // CRITICAL: Set user as permanent and remove expiration
-    db.updateUser(username, { 
-        permanent: true, 
-        expiresAt: null 
-    });
+    user.permanent = true;
+    user.expiresAt = null;
     
     return res.status(200).json({
         success: true,
-        message: `User "${username}" set as permanent and will never expire`
+        message: `User "${username}" set as PERMANENT - will never expire until manually removed`
     });
 }
 
-async function handleAdminRefreshUser(req, res, db) {
+async function handleAdminRefreshUser(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ success: false, message: 'Method not allowed' });
     }
@@ -520,7 +575,7 @@ async function handleAdminRefreshUser(req, res, db) {
         });
     }
     
-    const user = db.findUser(username);
+    const user = users.find(u => u.username === username);
     
     if (!user) {
         return res.status(404).json({
@@ -533,11 +588,11 @@ async function handleAdminRefreshUser(req, res, db) {
     if (user.permanent === false && user.expiresAt) {
         const newExpiration = new Date();
         newExpiration.setDate(newExpiration.getDate() + 30);
-        db.updateUser(username, { expiresAt: newExpiration.toISOString() });
+        user.expiresAt = newExpiration.toISOString();
     }
     
     // Update session activity
-    for (const [sessionId, session] of db.activeSessions.entries()) {
+    for (const [sessionId, session] of activeSessions.entries()) {
         if (session.username === username) {
             session.lastActivity = new Date().toISOString();
         }
